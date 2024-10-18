@@ -181,7 +181,7 @@ exports.require2FAVerification = catchAsync(async (req, res, next) => {
 
   const user = await User.findById(userId);
 
-  if (!user || user.twoFactorAuthCode) {
+  if (!user || user.twoFactorAuthToken) {
     return next(
       new AppError("2FA verification required to access this resource.", 401)
     );
