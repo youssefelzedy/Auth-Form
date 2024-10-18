@@ -47,6 +47,13 @@ const userSchema = new mongoose.Schema({
     type: String,
   },
   twoFactorAuthExpires: Date,
+  trustedDevices: [
+    {
+      deviceId: String,
+      createdAt: Date,
+      expiresAt: Date,
+    },
+  ],
   active: {
     type: Boolean,
     default: true,

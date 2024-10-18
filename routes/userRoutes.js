@@ -12,7 +12,7 @@ router.patch("/verifyEmail/:token", authController.getVerify);
 router.post("/verify-2fa", authController.verify2FA);
 
 // Protect all routes after this middleware
-router.use(authController.require2FAVerification, authController.protect);
+router.use(authController.protect);
 
 router.patch("/updateMyPassword", authController.updatePassword);
 router.get("/me", userController.getMe, userController.getUser);

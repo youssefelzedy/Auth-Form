@@ -115,7 +115,22 @@ exports.login = catchAsync(async (req, res, next) => {
     return next(new AppError("Please verify your email first", 401));
   }
 
-  // 5) send 2FA token
+  // 5) Check for "trustedDevice" cookie
+  const trustedDeviceId = req.cookies["trustedDevice"];
+  if (trustedDeviceId) {
+    const isTrustedDevice = user.trustedDevices.find(
+      (device) =>
+        device.deviceId === trustedDeviceId && device.expiresAt > Date.now()
+    );
+
+    if (isTrustedDevice) {
+      // Directly log in the user without 2FA
+      createSendToken(user, 200, res);
+      return;
+    }
+  }
+
+  // 6) send 2FA token
   const Auth2FA = user.create2FAToken();
   await user.save({ validateBeforeSave: false });
 
@@ -128,7 +143,7 @@ exports.login = catchAsync(async (req, res, next) => {
 
   res.cookie("2fa", token2FAUserID, cookieOptions);
 
-  // 3) If everything ok, send 2FA token to the email
+  // 7) If everything ok, send 2FA token to the email
   res.status(200).json({
     status: "success",
     token2FAUserID,
@@ -138,7 +153,7 @@ exports.login = catchAsync(async (req, res, next) => {
 
 exports.verify2FA = catchAsync(async (req, res, next) => {
   const userId = req.body.userId || req.cookies["2fa"];
-  const { twoFactorCode } = req.body;
+  const { twoFactorCode, saveDevice } = req.body;
 
   if (!userId || !twoFactorCode) {
     return next(new AppError("Please provide user ID and 2FA code!", 400));
@@ -167,43 +182,45 @@ exports.verify2FA = catchAsync(async (req, res, next) => {
   // If the code is valid, clear the 2FA data and log the user in
   user.twoFactorAuthToken = undefined;
   user.twoFactorAuthExpires = undefined;
+
+  if (saveDevice) {
+    const deviceId = crypto.randomBytes(32).toString("hex");
+    const expiresIn = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+    user.trustedDevices.push({
+      deviceId,
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + expiresIn),
+    });
+
+    // Set cookie with device token
+    res.cookie("trustedDevice", deviceId, {
+      expires: new Date(Date.now() + expiresIn),
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+    });
+  }
+
   await user.save({ validateBeforeSave: false });
 
+  res.clearCookie("2fa");
   createSendToken(user, 200, res);
-});
-
-exports.require2FAVerification = catchAsync(async (req, res, next) => {
-  const userId = req.body.userId || req.cookies["2fa"];
-
-  if (!userId) {
-    return next(new AppError("Please provide userID!", 400));
-  }
-
-  const user = await User.findById(userId);
-
-  if (!user || user.twoFactorAuthToken) {
-    return next(
-      new AppError("2FA verification required to access this resource.", 401)
-    );
-  }
-
-  next();
 });
 
 exports.protect = catchAsync(async (req, res, next) => {
   // 1) Getting token and check of it's there
   let token;
   if (
-    req.headers.authorization &&
-    req.headers.authorization.startsWith("Bearer")
+    (req.headers.authorization &&
+      req.headers.authorization.startsWith("Bearer")) ||
+    req.cookies.jwt ||
+    req.headers.authorization?.split(" ")[1]
   ) {
-    token = req.headers.authorization.split(" ")[1];
+    token = req.headers.authorization.split(" ")[1] || req.cookies.jwt;
   }
 
   if (!token) {
-    return next(
-      new AppError("You are not logged in! Please log in to get access.", 401)
-    );
+    return next(new AppError("Authentication required. Please log in.", 401));
   }
 
   // 2) Verification token
@@ -227,9 +244,16 @@ exports.protect = catchAsync(async (req, res, next) => {
     );
   }
 
-  // GRANT ACCESS TO PROTECTED ROUTE
-  req.user = currentUser;
-  next();
+  // 3) If 2FA verification was required, ensure it was completed (otherwise, this middleware won't be called)
+  if (!currentUser.twoFactorAuthToken) {
+    // GRANT ACCESS TO PROTECTED ROUTE
+    req.user = currentUser;
+    return next(); // 2FA is complete or not required, proceed
+  }
+
+  return next(
+    new AppError("2FA verification required to access this resource.", 401)
+  );
 });
 
 exports.restrictTo = (...roles) => {
