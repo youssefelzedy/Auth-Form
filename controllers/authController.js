@@ -26,6 +26,8 @@ const createSendToken = (user, statusCode, res) => {
 
   // Remove password from output
   user.password = undefined;
+  user.active = undefined;
+  user.role = undefined;
 
   res.status(statusCode).json({
     status: "success",
@@ -103,16 +105,89 @@ exports.login = catchAsync(async (req, res, next) => {
   // 2) Check if user exists && password is correct
   const user = await User.findOne({ email }).select("+password");
 
-  if (user.verifyEmailToken) {
-    return next(new AppError("Please verify your email first", 401));
-  }
-
+  // 3) check the user exsist or not and password correct or not
   if (!user || !(await user.correctPassword(password, user.password))) {
     return next(new AppError("Incorrect email or password", 401));
   }
 
-  // 3) If everything ok, send token to client
+  // 4) check if the email is verifyed or not
+  if (user.verifyEmailToken) {
+    return next(new AppError("Please verify your email first", 401));
+  }
+
+  // 5) send 2FA token
+  const Auth2FA = user.create2FAToken();
+  await user.save({ validateBeforeSave: false });
+
+  const token2FAUserID = user._id;
+  const cookieOptions = {
+    expires: new Date(Date.now() + 10 * 60 * 1000),
+    httpOnly: true,
+  };
+  if (process.env.NODE_ENV === "production") cookieOptions.secure = true;
+
+  res.cookie("2fa", token2FAUserID, cookieOptions);
+
+  // 3) If everything ok, send 2FA token to the email
+  res.status(200).json({
+    status: "success",
+    token2FAUserID,
+    message: "Logging in... Please check your email for the 2FA token.",
+  });
+});
+
+exports.verify2FA = catchAsync(async (req, res, next) => {
+  const userId = req.body.userId || req.cookies["2fa"];
+  const { twoFactorCode } = req.body;
+
+  if (!userId || !twoFactorCode) {
+    return next(new AppError("Please provide user ID and 2FA code!", 400));
+  }
+
+  console.log(userId, twoFactorCode);
+  const user = await User.findById(userId);
+  console.log(user);
+
+  if (!user || !user.twoFactorAuthToken) {
+    return next(new AppError("Invalid request. Please try again.", 400));
+  }
+
+  const hashedCode = crypto
+    .createHash("sha256")
+    .update(twoFactorCode)
+    .digest("hex");
+
+  if (
+    hashedCode !== user.twoFactorAuthToken ||
+    user.twoFactorAuthExpires < Date.now()
+  ) {
+    return next(new AppError("Invalid or expired 2FA code.", 400));
+  }
+
+  // If the code is valid, clear the 2FA data and log the user in
+  user.twoFactorAuthToken = undefined;
+  user.twoFactorAuthExpires = undefined;
+  await user.save({ validateBeforeSave: false });
+
   createSendToken(user, 200, res);
+});
+
+exports.require2FAVerification = catchAsync(async (req, res, next) => {
+  const userId = req.body.userId || req.cookies["2fa"];
+
+  if (!userId) {
+    return next(new AppError("Please provide userID!", 400));
+  }
+
+  const user = await User.findById(userId);
+
+  if (!user || user.twoFactorAuthCode) {
+    return next(
+      new AppError("2FA verification required to access this resource.", 401)
+    );
+  }
+
+  next();
 });
 
 exports.protect = catchAsync(async (req, res, next) => {

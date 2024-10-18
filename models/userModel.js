@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const mongoose = require("mongoose");
 const validator = require("validator");
 const bcrypt = require("bcryptjs");
+const { type } = require("os");
 
 const userSchema = new mongoose.Schema({
   name: {
@@ -42,6 +43,10 @@ const userSchema = new mongoose.Schema({
   passwordResetToken: String,
   passwordResetExpires: Date,
   verifyEmailToken: String,
+  twoFactorAuthToken: {
+    type: String,
+  },
+  twoFactorAuthExpires: Date,
   active: {
     type: Boolean,
     default: true,
@@ -121,6 +126,20 @@ userSchema.methods.createVerifyEmailToken = function () {
   console.log({ emailToken }, this.verifyEmailToken);
 
   return emailToken;
+};
+
+userSchema.methods.create2FAToken = function () {
+  const Token = crypto.randomBytes(3).toString("hex").substring(0, 5);
+
+  this.twoFactorAuthToken = crypto
+    .createHash("sha256")
+    .update(Token)
+    .digest("hex");
+  this.twoFactorAuthExpires = Date.now() + 10 * 60 * 1000;
+
+  console.log({ Token }, this.twoFactorAuthToken);
+
+  return Token;
 };
 
 const User = mongoose.model("User", userSchema);
