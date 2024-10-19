@@ -48,6 +48,7 @@ const verfiyEmail = catchAsync(async (user) => {
   const resetToken = user.createVerifyEmailToken();
   await user.save({ validateBeforeSave: false });
 
+
   // 3) Send it to user's email
   // const resetURL = `${req.protocol}://${req.get(
   //   "host"
